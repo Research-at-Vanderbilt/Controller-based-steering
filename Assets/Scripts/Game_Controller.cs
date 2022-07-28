@@ -12,27 +12,27 @@ public class Game_Controller : MonoBehaviour
     public bool Other_Controller_Activated;
     [HideInInspector]
     public bool Calibration_Done;
-    public int Which_Handed_Person = 1; // For Right Hand as a Dominant Hand Only
+    [HideInInspector]
+    public int Which_Handed_Person;
+    public GameObject Canvas, EventSystem, Objects;
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        Objects.SetActive(false);
+    }
 
     // Update is called once per frame
     void Update()
     {
         if (Which_Handed_Person == 1)
         {
-            if (updateStopper == false)
-            {
-                MSC.initialCheck = true;
-                updateStopper = true;
-            }
+            InitialSetupper();
             Other_Controller_Activated = Check_If_Activated(LeftController); //Recalibration with primary button of the non-dominant hand
         }
         else
         {
-            if (updateStopper == false)
-            {
-                MSC.initialCheck = true;
-                updateStopper = true;
-            }
+            InitialSetupper();
             Other_Controller_Activated = Check_If_Activated(RightController); //Recalibration with primary button of the non-dominant hand
         }
 
@@ -48,9 +48,43 @@ public class Game_Controller : MonoBehaviour
             Calibration_Done = false;
     }
 
+    private void InitialSetupper()
+    {
+        if (updateStopper == false)
+        {
+            MSC.initialCheck = true;
+            updateStopper = true;
+        }
+    }
+
+    private void PostButtonClicked()
+    {
+        LeftController.gameObject.GetComponent<XRRayInteractor>().enabled = false;
+        LeftController.gameObject.GetComponent<LineRenderer>().enabled = false;
+        LeftController.gameObject.GetComponent<XRInteractorLineVisual>().enabled = false;
+        RightController.gameObject.GetComponent<XRRayInteractor>().enabled = false;
+        RightController.gameObject.GetComponent<LineRenderer>().enabled = false;
+        RightController.gameObject.GetComponent<XRInteractorLineVisual>().enabled = false;
+        Destroy(Canvas);
+        Destroy(EventSystem);
+        Objects.SetActive(true);
+    }
+
     public bool Check_If_Activated(XRController controller)
     {
         InputHelpers.IsPressed(controller.inputDevice, PrimaryButtonOfTheInactiveHand, out bool isActivated, activationThresold);
         return isActivated;
+    }
+
+    public void RightHandButtonClicked()
+    {
+        Which_Handed_Person = 1;
+        PostButtonClicked();
+    }
+
+    public void LeftHandButtonClicked()
+    {
+        Which_Handed_Person = 2;
+        PostButtonClicked();
     }
 }

@@ -1,4 +1,3 @@
-using TMPro;
 using UnityEngine;
 using UnityEngine.XR;
 
@@ -23,8 +22,6 @@ public class Modified_Steering_Controller : MonoBehaviour
     [HideInInspector]
     public bool initialCheck;
     private Vector3 direction;
-    [HideInInspector]
-    public bool Final_UI_Activated;
 
     // Start is called before the first frame update
     void Start()
