@@ -31,6 +31,7 @@ using System.IO;
 using System.Xml;
 using System.Diagnostics;
 using System.Threading;
+using Oculus.VR.Editor;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -45,6 +46,10 @@ using UnityEngine.XR.OpenXR;
 using UnityEditor.XR.OpenXR.Features;
 #endif
 
+#if USING_XR_SDK_OCULUS
+using Unity.XR.Oculus;
+#endif
+
 [InitializeOnLoad]
 public class OVRGradleGeneration
 	: IPreprocessBuildWithReport, IPostprocessBuildWithReport
@@ -55,7 +60,13 @@ public class OVRGradleGeneration
 	public OVRADBTool adbTool;
 	public Process adbProcess;
 
-	public int callbackOrder { get { return 3; } }
+#if PRIORITIZE_OCULUS_XR_SETTINGS
+	private int _callbackOrder = 3;
+#else
+	private int _callbackOrder = 99999; // be executed after OculusManifest in Oculus XR Plugin, which has callbackOrder 10000
+#endif
+
+	public int callbackOrder { get { return _callbackOrder; } }
 	static private System.DateTime buildStartTime;
 	static private System.Guid buildGuid;
 
@@ -65,7 +76,11 @@ public class OVRGradleGeneration
 	static bool autoIncrementVersion = false;
 #endif
 
-	static OVRGradleGeneration()
+#if UNITY_ANDROID && USING_XR_SDK_OCULUS
+    static private bool symmetricWarningShown = false;
+#endif
+
+    static OVRGradleGeneration()
 	{
 		EditorApplication.delayCall += OnDelayCall;
 	}
@@ -95,45 +110,46 @@ public class OVRGradleGeneration
 
 	public void OnPreprocessBuild(BuildReport report)
 	{
-		bool useOpenXR = OVRPluginUpdater.IsOVRPluginOpenXRActivated();
+		bool useOpenXR = OVRPluginInfo.IsOVRPluginOpenXRActivated();
 
 #if USING_XR_SDK_OPENXR
-		UnityEngine.Debug.LogWarning("The installation of Unity OpenXR Plugin is detected, which should NOT be used in production when developing Oculus apps for production. Please uninstall the package, and install the Oculus XR Plugin from the Package Manager.");
+		UnityEngine.Debug.LogWarning("The installation of Unity OpenXR Plugin is detected, which should NOT be used in production when developing Meta Quest apps for production. Please uninstall the package, and install the Oculus XR Plugin from the Package Manager.");
 
-		// OpenXR Plugin will remove all native plugins if they are not under the Feature folder. Include OVRPlugin to the build if OculusXRFeature is enabled.
-		var oculusXRFeature = FeatureHelpers.GetFeatureWithIdForBuildTarget(report.summary.platformGroup, Oculus.XR.OculusXRFeature.featureId);
-		if (oculusXRFeature.enabled)
+		// OpenXR Plugin will remove all native plugins if they are not under the Feature folder. Include OVRPlugin to the build if MetaXRFeature is enabled.
+		var metaXRFeature = FeatureHelpers.GetFeatureWithIdForBuildTarget(report.summary.platformGroup, Meta.XR.MetaXRFeature.featureId);
+		if (metaXRFeature.enabled && !useOpenXR)
 		{
-			if (!useOpenXR)
+			throw new BuildFailedException("OpenXR backend for Oculus Plugin is disabled, which is required to support Unity OpenXR Plugin. Please enable OpenXR backend for Oculus Plugin through the 'Oculus -> Tools -> OpenXR' menu.");
+		}
+
+		string ovrRootPath = OVRPluginInfo.GetUtilitiesRootPath();
+		var importers = PluginImporter.GetAllImporters();
+		foreach (var importer in importers)
+		{
+			if (!importer.GetCompatibleWithPlatform(report.summary.platform))
+				continue;
+			string fullAssetPath = Path.Combine(Directory.GetCurrentDirectory(), importer.assetPath);
+#if UNITY_EDITOR_WIN
+			fullAssetPath = fullAssetPath.Replace("/", "\\");
+#endif
+			if (fullAssetPath.StartsWith(ovrRootPath) && fullAssetPath.Contains("OVRPlugin"))
 			{
-				throw new BuildFailedException("OpenXR backend for Oculus Plugin is disabled, which is required to support Unity OpenXR Plugin. Please enable OpenXR backend for Oculus Plugin through the 'Oculus -> Tools -> OpenXR' menu.");
+				if (metaXRFeature.enabled)
+					UnityEngine.Debug.LogFormat("[Meta] Native plugin included in build because of enabled MetaXRFeature: {0}", importer.assetPath);
+				else
+					UnityEngine.Debug.LogWarning("MetaXRFeature is not enabled in OpenXR Settings. Oculus Integration scripts will not be functional.");
+				importer.SetIncludeInBuildDelegate(path => metaXRFeature.enabled);
 			}
 
-			string ovrRootPath = OVRPluginUpdater.GetUtilitiesRootPath();
-			var importers = PluginImporter.GetAllImporters();
-			foreach (var importer in importers)
+			// Only disable other OpenXR Loaders if the Meta XR feature is enabled
+			if (metaXRFeature.enabled)
 			{
-				if (!importer.GetCompatibleWithPlatform(report.summary.platform))
-					continue;
-				string fullAssetPath = Path.Combine(Directory.GetCurrentDirectory(), importer.assetPath);
-#if UNITY_EDITOR_WIN
-				fullAssetPath = fullAssetPath.Replace("/", "\\");
-#endif
-				if (fullAssetPath.StartsWith(ovrRootPath) && fullAssetPath.Contains("OVRPlugin"))
+				if (!fullAssetPath.StartsWith(ovrRootPath) && (fullAssetPath.Contains("libopenxr_loader.so") || fullAssetPath.Contains("openxr_loader.aar")))
 				{
-					UnityEngine.Debug.LogFormat("[Oculus] Native plugin included in build because of enabled OculusXRFeature: {0}", importer.assetPath);
-					importer.SetIncludeInBuildDelegate(path => true);
-				}
-				if (!fullAssetPath.StartsWith(ovrRootPath) && fullAssetPath.Contains("libopenxr_loader.so"))
-				{
-					UnityEngine.Debug.LogFormat("[Oculus] libopenxr_loader.so from other packages will be disabled because of enabled OculusXRFeature: {0}", importer.assetPath);
+					UnityEngine.Debug.LogFormat("[Meta] libopenxr_loader.so from other packages will be disabled because of enabled MetaXRFeature: {0}", importer.assetPath);
 					importer.SetIncludeInBuildDelegate(path => false);
 				}
 			}
-		}
-		else
-		{
-			UnityEngine.Debug.LogWarning("OculusXRFeature is not enabled in OpenXR Settings. Oculus Integration scripts will not be functional.");
 		}
 #endif
 
@@ -149,12 +165,21 @@ public class OVRGradleGeneration
 		}
 #endif
 
+#if UNITY_ANDROID && USING_XR_SDK_OCULUS && OCULUS_XR_SYMMETRIC
+        OculusSettings settings;
+        UnityEditor.EditorBuildSettings.TryGetConfigObject<OculusSettings>("Unity.XR.Oculus.Settings", out settings);
+
+        if (settings.SymmetricProjection && !symmetricWarningShown)
+        {
+            symmetricWarningShown = true;
+            UnityEngine.Debug.LogWarning("Symmetric Projection is enabled in the Oculus XR Settings. To ensure best GPU performance, make sure at least FFR 1 is being used.");
+        }
+#endif
+
 #if UNITY_ANDROID
 #if USING_XR_SDK
-		if (useOpenXR)
+        if (useOpenXR)
 		{
-			UnityEngine.Debug.LogWarning("Oculus Utilities Plugin with OpenXR is being used, which is under experimental status");
-
 			if (PlayerSettings.colorSpace != ColorSpace.Linear)
 			{
 				throw new BuildFailedException("Oculus Utilities Plugin with OpenXR only supports linear lighting. Please set 'Rendering/Color Space' to 'Linear' in Player Settings");
@@ -279,7 +304,7 @@ public class OVRGradleGeneration
 
 	private static string GetOculusProjectNetworkSecConfigPath()
 	{
-		var so = ScriptableObject.CreateInstance(typeof(OVRPluginUpdaterStub));
+		var so = ScriptableObject.CreateInstance(typeof(OVRPluginInfo));
 		var script = MonoScript.FromScriptableObject(so);
 		string assetPath = AssetDatabase.GetAssetPath(script);
 		string editorDir = Directory.GetParent(assetPath).FullName;

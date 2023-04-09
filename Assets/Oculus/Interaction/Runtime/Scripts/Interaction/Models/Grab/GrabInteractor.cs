@@ -22,6 +22,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Assertions;
 using Oculus.Interaction.Throw;
+using System;
+using Oculus.Interaction.Grab;
 
 namespace Oculus.Interaction
 {
@@ -41,14 +43,15 @@ namespace Oculus.Interaction
         private Transform _grabTarget;
 
         private Collider[] _colliders;
-
         private Tween _tween;
-
         private bool _outsideReleaseDist = false;
 
         [SerializeField, Interface(typeof(IVelocityCalculator)), Optional]
         private MonoBehaviour _velocityCalculator;
         public IVelocityCalculator VelocityCalculator { get; set; }
+
+        private GrabInteractable _selectedInteractableOverride;
+        private bool _isSelectionOverriden = false;
 
         protected override void Awake()
         {
@@ -60,16 +63,18 @@ namespace Oculus.Interaction
         protected override void Start()
         {
             this.BeginStart(ref _started, () => base.Start());
-            Assert.IsNotNull(Selector);
-            Assert.IsNotNull(Rigidbody);
+            this.AssertField(Selector, nameof(Selector));
+            this.AssertField(Rigidbody, nameof(Rigidbody));
 
             _colliders = Rigidbody.GetComponentsInChildren<Collider>();
-            Assert.IsTrue(_colliders.Length > 0,
-            "The associated Rigidbody must have at least one Collider.");
+
+            this.AssertCollectionField(_colliders, nameof(_colliders),
+               $"The associated {AssertUtils.Nicify(nameof(Rigidbody))} must have at least one Collider.");
+
             foreach (Collider collider in _colliders)
             {
-                Assert.IsTrue(collider.isTrigger,
-                    "Associated Colliders must be marked as Triggers.");
+                this.AssertIsTrue(collider.isTrigger,
+                    $"Associated Colliders in the {AssertUtils.Nicify(nameof(Rigidbody))} must be marked as Triggers.");
             }
 
             if (_grabCenter == null)
@@ -84,7 +89,7 @@ namespace Oculus.Interaction
 
             if (_velocityCalculator != null)
             {
-                Assert.IsNotNull(VelocityCalculator);
+                this.AssertField(VelocityCalculator, nameof(VelocityCalculator));
             }
 
             _tween = new Tween(Pose.identity);
@@ -102,33 +107,61 @@ namespace Oculus.Interaction
         {
             Vector3 position = Rigidbody.transform.position;
             GrabInteractable closestInteractable = null;
-            float bestScore = float.MaxValue;
-            float score = bestScore;
-            bool closestPointIsInside = false;
+            GrabPoseScore bestScore = GrabPoseScore.Max;
 
-            IEnumerable<GrabInteractable> interactables = GrabInteractable.Registry.List(this);
+            var interactables = GrabInteractable.Registry.List(this);
             foreach (GrabInteractable interactable in interactables)
             {
                 Collider[] colliders = interactable.Colliders;
-                foreach (Collider collider in colliders)
+                GrabPoseScore score = GrabPoseHelper.CollidersScore(position, interactable.Colliders, out Vector3 hit);
+                if (score.IsBetterThan(bestScore))
                 {
-                    bool isPointInsideCollider = Collisions.IsPointWithinCollider(position, collider);
-                    if (!isPointInsideCollider && closestPointIsInside)
-                    {
-                        continue;
-                    }
-                    Vector3 measuringPoint = isPointInsideCollider ? collider.bounds.center : collider.ClosestPoint(position);
-                    score = (position - measuringPoint).sqrMagnitude;
-                    if (score < bestScore || (isPointInsideCollider && !closestPointIsInside))
-                    {
-                        bestScore = score;
-                        closestInteractable = interactable;
-                        closestPointIsInside = isPointInsideCollider;
-                    }
+                    bestScore = score;
+                    closestInteractable = interactable;
                 }
             }
 
             return closestInteractable;
+        }
+
+
+        public void ForceSelect(GrabInteractable interactable)
+        {
+            _isSelectionOverriden = true;
+            _selectedInteractableOverride = interactable;
+            SetComputeCandidateOverride(() => interactable);
+            SetComputeShouldSelectOverride(() => ReferenceEquals(interactable, Interactable));
+            SetComputeShouldUnselectOverride(() => !ReferenceEquals(interactable, SelectedInteractable), false);
+        }
+
+        public void ForceRelease()
+        {
+            _isSelectionOverriden = false;
+            _selectedInteractableOverride = null;
+            ClearComputeCandidateOverride();
+            ClearComputeShouldSelectOverride();
+            if (State == InteractorState.Select)
+            {
+                SetComputeShouldUnselectOverride(() => true);
+            }
+            else
+            {
+                ClearComputeShouldUnselectOverride();
+            }
+        }
+
+        public override void Unselect()
+        {
+            if (State == InteractorState.Select
+                && _isSelectionOverriden
+                && (SelectedInteractable == _selectedInteractableOverride
+                    || SelectedInteractable == null))
+            {
+                _isSelectionOverriden = false;
+                _selectedInteractableOverride = null;
+                ClearComputeShouldUnselectOverride();
+            }
+            base.Unselect();
         }
 
         protected override void InteractableSelected(GrabInteractable interactable)
@@ -171,14 +204,14 @@ namespace Oculus.Interaction
                     Pose source = _interactable.GetGrabSourceForTarget(target);
                     _tween.StopAndSetPose(source);
                     SelectedInteractable.PointableElement.ProcessPointerEvent(
-                        new PointerEvent(Identifier, PointerEventType.Move, _tween.Pose));
+                        new PointerEvent(Identifier, PointerEventType.Move, _tween.Pose, Data));
                     _tween.MoveTo(target);
                 }
                 else
                 {
                     _tween.StopAndSetPose(target);
                     SelectedInteractable.PointableElement.ProcessPointerEvent(
-                        new PointerEvent(Identifier, PointerEventType.Move, target));
+                        new PointerEvent(Identifier, PointerEventType.Move, target, Data));
                     _tween.MoveTo(target);
                 }
             }
@@ -196,7 +229,7 @@ namespace Oculus.Interaction
         protected override void DoSelectUpdate()
         {
             GrabInteractable interactable = _selectedInteractable;
-            if(interactable == null)
+            if (interactable == null)
             {
                 return;
             }
@@ -225,21 +258,9 @@ namespace Oculus.Interaction
             }
         }
 
-        public override bool ShouldUnselect {
-            get
-            {
-                if (State != InteractorState.Select)
-                {
-                    return false;
-                }
-
-                if (_outsideReleaseDist)
-                {
-                    return true;
-                }
-
-                return base.ShouldUnselect;
-            }
+        protected override bool ComputeShouldUnselect()
+        {
+            return _outsideReleaseDist || base.ComputeShouldUnselect();
         }
 
         #region Inject

@@ -1,12 +1,19 @@
-﻿using System;
+﻿/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
 using System.Collections;
 using System.Collections.Generic;
-using Facebook.WitAi.Events;
-using Facebook.WitAi.Interfaces;
-using Facebook.WitAi.Lib;
+using Meta.WitAi.Events;
+using Meta.WitAi.Interfaces;
+using Meta.WitAi.Lib;
 using UnityEngine;
 
-namespace Facebook.WitAi.Data
+namespace Meta.WitAi.Data
 {
     public class AudioBuffer : MonoBehaviour
     {
@@ -50,7 +57,21 @@ namespace Facebook.WitAi.Data
         {
             _instance = this;
             _instanceInit = true;
-            _micInput = GetComponent<IAudioInputSource>();
+            // Check this gameobject & it's children for audio input
+            _micInput = gameObject.GetComponentInChildren<IAudioInputSource>();
+            // Check all roots for Mic Input JIC
+            if (_micInput == null)
+            {
+                foreach (var root in gameObject.scene.GetRootGameObjects())
+                {
+                    _micInput = root.GetComponentInChildren<IAudioInputSource>();
+                    if (_micInput != null)
+                    {
+                        break;
+                    }
+                }
+            }
+            // Use default mic script
             if (_micInput == null)
             {
                 _micInput = gameObject.AddComponent<Mic>();
@@ -80,6 +101,8 @@ namespace Facebook.WitAi.Data
             _micInput.OnSampleReady -= OnMicSampleReady;
 
             if (alwaysRecording) StopRecording(this);
+
+            _instanceInit = false;
         }
 
         // Callback for mic sample ready
@@ -151,6 +174,7 @@ namespace Facebook.WitAi.Data
         private IEnumerator WaitForMicToStart(Component component)
         {
             yield return new WaitUntil(() => null != _micInput);
+            yield return new WaitUntil(() => _micInput.IsInputAvailable);
 
             _activeRecorders.Add(component);
             if (!_micInput.IsRecording)

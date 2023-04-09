@@ -21,90 +21,22 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-
-[DefaultExecutionOrder(-80)]
 public class OVRCustomSkeleton : OVRSkeleton, ISerializationCallbackReceiver
 {
-	[HideInInspector]
-	[SerializeField]
-	private List<Transform> _customBones_V2;
-
-#if UNITY_EDITOR
-
-	private static readonly string[] _fbxHandSidePrefix = { "l_", "r_" };
-	private static readonly string _fbxHandBonePrefix = "b_";
-
-	private static readonly string[] _fbxHandBoneNames =
-	{
-		"wrist",
-		"forearm_stub",
-		"thumb0",
-		"thumb1",
-		"thumb2",
-		"thumb3",
-		"index1",
-		"index2",
-		"index3",
-		"middle1",
-		"middle2",
-		"middle3",
-		"ring1",
-		"ring2",
-		"ring3",
-		"pinky0",
-		"pinky1",
-		"pinky2",
-		"pinky3"
-	};
-
-	private static readonly string[] _fbxHandFingerNames =
-	{
-		"thumb",
-		"index",
-		"middle",
-		"ring",
-		"pinky"
-	};
-#endif // UNITY_EDITOR
-
+	[HideInInspector] [SerializeField] private List<Transform> _customBones_V2;
 	public List<Transform> CustomBones => _customBones_V2;
 
-#if UNITY_EDITOR
-	public void TryAutoMapBonesByName()
+	/// <summary>
+	/// List of skeleton structures to be retargeted to the supported format for body tracking.
+	/// </summary>
+	public enum RetargetingType
 	{
-		BoneId start = GetCurrentStartBoneId();
-		BoneId end = GetCurrentEndBoneId();
-		SkeletonType skeletonType = GetSkeletonType();
-		if (start != BoneId.Invalid && end != BoneId.Invalid)
-		{
-			for (int bi = (int)start; bi < (int)end; ++bi)
-			{
-				string fbxBoneName = FbxBoneNameFromBoneId(skeletonType, (BoneId)bi);
-				Transform t = transform.FindChildRecursive(fbxBoneName);
-
-
-				if (t != null)
-				{
-					_customBones_V2[(int)bi] = t;
-				}
-			}
-		}
+		/// <summary>The default skeleton structure of the Oculus tracking system</summary>
+		OculusSkeleton,
 	}
 
-	private static string FbxBoneNameFromBoneId(SkeletonType skeletonType, BoneId bi)
-	{
-		{
-			if (bi >= BoneId.Hand_ThumbTip && bi <= BoneId.Hand_PinkyTip)
-			{
-				return _fbxHandSidePrefix[(int)skeletonType] + _fbxHandFingerNames[(int)bi - (int)BoneId.Hand_ThumbTip] + "_finger_tip_marker";
-			}
-			else
-			{
-				return _fbxHandBonePrefix + _fbxHandSidePrefix[(int)skeletonType] + _fbxHandBoneNames[(int)bi];
-			}
-		}
-	}
-#endif
+	[SerializeField, HideInInspector]
+	internal RetargetingType retargetingType;
 
 	protected override Transform GetBoneTransform(BoneId boneId) => _customBones_V2[(int)boneId];
 
@@ -125,6 +57,11 @@ public class OVRCustomSkeleton : OVRSkeleton, ISerializationCallbackReceiver
 
 	void ISerializationCallbackReceiver.OnAfterDeserialize()
 	{
+		AllocateBones();
+	}
+
+	private void AllocateBones()
+	{
 		if (_customBones_V2.Count == (int) BoneId.Max) return;
 
 		// Make sure we have the right number of bones
@@ -136,5 +73,13 @@ public class OVRCustomSkeleton : OVRSkeleton, ISerializationCallbackReceiver
 #if UNITY_EDITOR
 		_shouldSetDirty = true;
 #endif
+	}
+
+	internal void SetSkeletonType(SkeletonType skeletonType)
+	{
+		_skeletonType = skeletonType;
+		_customBones_V2 ??= new List<Transform>();
+		
+		AllocateBones();
 	}
 }
